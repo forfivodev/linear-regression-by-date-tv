@@ -1,0 +1,135 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © LonesomeTheBlue
+// © GM 2023
+//@version=5 
+
+indicator("LR by date", overlay = true, max_lines_count = 500)
+
+//fix for max_bars_back bug  
+// https://www.tradingview.com/support/solutions/43000587849-i-see-pine-cannot-determine-the-referencing-length-of-a-series-try-using-max-bars-back-error/
+max_bars_back(time, 4999)
+
+useNow                      = input(false, "Use real time")
+
+startTime                   = input.time(timestamp("20 Jul 2022 00:00 +000"), title = "Start time", confirm = true)
+endTime                     = useNow ? time_close : input.time(timestamp("21 Jul 2022 00:00 +000"), title = "End time", confirm = true)
+
+_barForTime(_t) =>
+    var int _bar = na
+    if time_close[1] <= _t
+        _bar := bar_index
+    _bar
+    
+firstTime   = _barForTime(startTime)
+secondTime  = _barForTime(endTime)
+barDelta    = secondTime - firstTime
+deltaFromlastbar = 0
+if barstate.islast      
+    deltaFromlastbar := _barForTime(time_close - secondTime)
+
+src                         = input(defval = close, title = "Source", group = "Channel settings")
+dev_count                   = input.int(50, "Dev channel lines", group = "Channel settings")
+devlen                      = input.float(defval = 0.5, title = "Deviation", minval = 0.01, step = 0.1, group = "Channel settings")
+
+extendit                    = input(defval = true, title = "Extend lines")
+upmidcol                    = input(defval = color.rgb(51, 255, 0), title = "Up/Down", inline = "trcols", group = "Mid style")
+dnmidcol                    = input(defval = color.rgb(255, 0, 0), title = "", inline = "trcols", group = "Mid style")
+mid_width                   = input(defval = 3, title = "Line Width", inline = "trcols", group = "Mid style")
+mid_style_string            = input.string("Solid","Mid Style",options = ["Dotted","Dashed","Solid"],group = "Mid style",inline='1')
+mid_line_style              = mid_style_string == 'Dotted' ? line.style_dotted : mid_style_string == 'Dashed' ? line.style_dashed : line.style_solid
+
+upcol_lr                    = input(defval = color.rgb(0, 46, 195), title = "Up/Down", inline = "trcols", group = "Dev style")
+dncol_lr                    = input(defval = color.rgb(201, 94, 0), title = "", inline = "trcols", group = "Dev style")
+dev_width                   = input(defval = 1, title = "Line Width", inline = "trcols", group = "Dev style")
+stdev_style_string          = input.string("Dashed","Dev Style",options = ["Dotted","Dashed","Solid"],group = "Dev style",inline='1')
+stdev_line_style            = stdev_style_string == 'Dotted' ? line.style_dotted : stdev_style_string == 'Dashed' ? line.style_dashed : line.style_solid
+
+alpha                       = input(70, "Transparency",group = "Alpha",inline='1')
+
+get_channel(src, len)=>
+    mid = math.sum(src, len) / len
+    slope = ta.linreg(src, len, 0) - ta.linreg(src, len, 1)
+    intercept = mid - slope * math.floor(len / 2) + (((1 - (len % 2)) / 2)) * slope
+    endy = intercept + slope * ((len - 1))
+    dev = 0.0
+    for x = 0 to len - 1
+        dev := dev + math.pow(src[x] - (slope * (len - x) + intercept), 2)
+    dev := math.sqrt(dev/len)
+    [intercept, endy, dev, slope]
+
+var colors_stdev = array.new_color(2)
+var colors_mid = array.new_color(2)
+var colors_labels = array.new_color(2)
+if barstate.isfirst
+    array.unshift(colors_stdev, upcol_lr)
+    array.unshift(colors_stdev, dncol_lr)
+    array.unshift(colors_mid, upmidcol)
+    array.unshift(colors_mid, dnmidcol)
+    array.unshift(colors_labels, color.new(upmidcol, alpha))
+    array.unshift(colors_labels, color.new(dnmidcol, alpha))
+
+len = 4999
+if barDelta > 0 
+    len := barDelta
+
+[y1_, y2_, dev, slope] = get_channel(src, len)
+
+line_count = dev_count + 1
+var reglines = array.new_line(line_count)
+var reglabels = array.new_label(line_count)
+
+if barstate.islast   
+    stl = slope > 0 ? slope > slope[1] ? label.style_label_up : label.style_label_upper_right : slope < 0 ? slope < slope[1] ? label.style_label_down :  label.style_label_lower_right : label.style_label_right
+    for x = 0 to line_count - 1  
+        line.delete(array.get(reglines, x))  
+        label.delete(array.get(reglabels, x))
+        if x - dev_count / 2 != 0
+            array.set(reglines, x,
+                  line.new(x1 = bar_index - (len - 1), 
+                           y1 = y1_ + dev * devlen * (x - dev_count / 2), 
+                           x2 = bar_index, 
+                           y2 = y2_ + dev * devlen * (x - dev_count / 2),
+                           color = array.get(colors_stdev, math.round(math.max(math.sign(slope), 0))),
+                           style =  stdev_line_style,
+                           width = dev_width,
+                           extend = extendit ? extend.right : extend.none))
+        else
+            array.set(reglines, x,
+                  line.new(x1 = bar_index - (len - 1), 
+                           y1 = y1_ + dev * devlen * (x - dev_count / 2), 
+                           x2 = bar_index, 
+                           y2 = y2_ + dev * devlen * (x - dev_count / 2),
+                           color = array.get(colors_mid, math.round(math.max(math.sign(slope), 0))),
+                           style =  mid_line_style,
+                           width = mid_width,
+                           extend = extendit ? extend.right : extend.none))
+        if x - dev_count / 2 != 0
+            array.set(reglabels, x,
+                  label.new(x = bar_index - (len - 1) , 
+                           y = y1_ + dev * devlen * (x - dev_count / 2),
+                           text = str.tostring(devlen * (x - dev_count / 2)),  
+                           textcolor = array.get(colors_stdev, math.round(math.max(math.sign(slope), 0))),
+                           color = color.rgb(0, 0, 0, alpha),
+                           style = stl,
+                           size = size.normal))
+        // else
+        //     array.set(reglabels, x,
+        //           label.new(x = bar_index - (len - 1), 
+        //                    y = y1_ + dev * devlen * (x - dev_count / 2),
+        //                    text = str.tostring(devlen * (x - dev_count / 2)),  
+        //                    textcolor = array.get(colors_stdev, math.round(math.max(math.sign(slope), 0))),
+        //                    color = color.rgb(0, 0, 0, alpha),
+        //                    style = stl,
+        //                    size = size.normal))
+    //label.new(x = bar_index, y = y1_, text = str.tostring(barDelta),  size = size.normal, textcolor = color.white)
+
+    var label sidelab = label.new(x = bar_index - (len - 1), y = y1_, text = "S",  size = size.normal)
+    txt = slope > 0 ? slope > slope[1] ? "⇑" : "⇗" : slope < 0 ? slope < slope[1] ? "⇓" : "⇘" : "⇒"
+    label.set_style(sidelab, stl)
+    label.set_text(sidelab, txt)
+    label.set_x(sidelab, bar_index - (len - 1))
+    label.set_y(sidelab, slope > 0 ? y1_ : slope < 0 ? y1_ : y1_)
+    label.set_textcolor(sidelab, slope > 0 ? upmidcol : slope < 0 ? dnmidcol : color.blue)
+    label.set_color(sidelab, color.rgb(0, 0, 0, alpha))
+
+    
